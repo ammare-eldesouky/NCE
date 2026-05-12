@@ -1,0 +1,202 @@
+Base URL  : http://<server-ip>:8000
+WS Base   : ws://<server-ip>:8000
+
+1. HEALTH CHECK
+Method  : GET
+URL     : /health
+Body    : —
+
+Response:
+{
+  "status"         : "ok",
+  "active_sessions": 2
+}
+
+2. بدء جلسة — من الباك اند
+Method  : POST
+URL     : /session/start
+Headers : Content-Type: application/json
+
+Request Body:
+{
+  "student_id": "STU_001",
+  "exam_id"   : "EXAM_001",
+  "course_id" : "COURSE_001"
+}
+
+Response:
+{
+  "session_id": "a1b2c3d4-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+  "student_id": "STU_001",
+  "exam_id"   : "EXAM_001",
+  "course_id" : "COURSE_001",
+  "message"   : "Session created successfully"
+}
+
+الباك اند يبعت الـ session_id لفلاتر عشان يفتح WebSocket
+
+
+3. إنهاء جلسة — من الباك اند
+
+Method  : POST
+URL     : /session/end
+Headers : Content-Type: application/json
+
+Request Body:
+{
+  "session_id": "a1b2c3d4-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+}
+
+Response:
+{
+  "session_id"        : "a1b2c3d4-...",
+  "student_id"        : "STU_001",
+  "exam_id"           : "EXAM_001",
+  "course_id"         : "COURSE_001",
+  "total_warnings"    : 2,
+  "terminated"        : false,
+  "started_at"        : "2025-01-01T10:00:00",
+  "ended_at"          : "2025-01-01T11:00:00",
+  "violations_history": [
+    {
+      "violation_type": "HEAD_TURN_LEFT",
+      "timestamp"     : "2025-01-01T10:15:00",
+      "warning_number": 1,
+      "terminated"    : false,
+      "message"       : "Warning 1/3: Looking left detected"
+    },
+    {
+      "violation_type": "PHONE_DETECTED",
+      "timestamp"     : "2025-01-01T10:30:00",
+      "warning_number": 2,
+      "terminated"    : false,
+      "message"       : "Warning 2/3: Mobile phone detected"
+    }
+  ],
+  "message": "Session ended successfully"
+}
+
+ التقرير بيتبعت للباك اند تلقائي على /reports/final
+ لو الامتحان اتوقف تلقائي (3 تحذيرات)، التقرير بيتبعت من WebSocket مش من هنا
+
+4. تقرير لحظي للدكتور المراقب — من الباك اند
+Method  : GET
+URL     : /monitor/live/{exam_id}
+Body    : —
+
+Response:
+{
+  "exam_id"        : "EXAM_001",
+  "total_students" : 2,
+  "active_sessions": [
+    {
+      "session_id"    : "a1b2c3d4-...",
+      "student_id"    : "STU_001",
+      "exam_id"       : "EXAM_001",
+      "course_id"     : "COURSE_001",
+      "warnings"      : 1,
+      "terminated"    : false,
+      "last_violation": "HEAD_TURN_LEFT",
+      "last_message"  : "Warning 1/3: Looking left detected",
+      "status"        : "suspicious"
+    },
+    {
+      "session_id"    : "x9y8z7w6-...",
+      "student_id"    : "STU_002",
+      "exam_id"       : "EXAM_001",
+      "course_id"     : "COURSE_001",
+      "warnings"      : 0,
+      "terminated"    : false,
+      "last_violation": null,
+      "last_message"  : "No warnings",
+      "status"        : "ok"
+    }
+  ]
+}
+
+قيم الـ status:
+  "ok"         → مفيش تحذيرات
+  "suspicious" → في تحذير واحد أو أكتر
+  "terminated" → الامتحان اتوقف
+
+5. WebSocket — من فلاتر
+URL     : ws://<server-ip>:8000/ws/exam/{session_id}
+
+Input من فلاتر:
+  → bytes (صورة JPEG مضغوطة من الكاميرا)
+
+Output لفلاتر (نفس المفاتيح دايماً):
+{
+  "session_id": "a1b2c3d4-...",
+  "student_id": "STU_001",
+  "exam_id"   : "EXAM_001",
+  "course_id" : "COURSE_001",
+  "warnings"  : 0,
+  "terminated": false,
+  "violation" : null,
+  "message"   : "No warnings",
+  "face_count": 1,
+  "mean_y"    : 128.5
+}
+
+لو في مخالفة:
+{
+  "warnings"  : 1,
+  "terminated": false,
+  "violation" : "HEAD_TURN_LEFT",
+  "message"   : "Warning 1/3: Looking left detected",
+  "face_count": 1,
+  "mean_y"    : 128.5
+}
+
+لو الامتحان اتوقف:
+{
+  "warnings"  : 3,
+  "terminated": true,
+  "violation" : "PHONE_DETECTED",
+  "message"   : "Exam terminated: maximum warnings exceeded",
+  "face_count": 1,
+  "mean_y"    : 128.5
+}
+
+قيم الـ violation الممكنة:
+  null             → مفيش مخالفة
+  "NO_FACE"        → الوجه مش ظاهر
+  "MULTIPLE_FACES" → أكتر من وجه
+  "HEAD_TURN_LEFT" → بص شمال
+  "HEAD_TURN_RIGHT"→ بص يمين
+  "HEAD_TURN_DOWN" → بص تحت
+  "HEAD_TURN_UP"   → بص فوق
+  "PHONE_DETECTED" → موبايل ظاهر
+  "BOOK_DETECTED"  → كتاب ظاهر
+
+6. اللي بيتبعت للباك اند تلقائي (مش محتاج الباك يطلبه)
+
+عند كل warning حقيقي → POST {BACKEND_URL}/violations/live
+{
+  "session_id"    : "a1b2c3d4-...",
+  "student_id"    : "STU_001",
+  "exam_id"       : "EXAM_001",
+  "course_id"     : "COURSE_001",
+  "violation_type": "HEAD_TURN_LEFT",
+  "warning_number": 1,
+  "terminated"    : false,
+  "timestamp"     : "2025-01-01T10:15:00",
+  "message"       : "Warning 1/3: Looking left detected"
+}
+
+بعد انتهاء الامتحان → POST {BACKEND_URL}/reports/final
+{
+  "session_id"        : "a1b2c3d4-...",
+  "student_id"        : "STU_001",
+  "exam_id"           : "EXAM_001",
+  "course_id"         : "COURSE_001",
+  "total_warnings"    : 2,
+  "terminated"        : false,
+  "started_at"        : "2025-01-01T10:00:00",
+  "ended_at"          : "2025-01-01T11:00:00",
+  "violations_history": [...]
+}
+
+ BACKEND_URL يتحدد في config.py ده عندي في Ai 
+التقرير النهائي بيتبعت مرة واحدة بس حتى لو session/end اتطلب بعدها
